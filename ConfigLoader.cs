@@ -122,9 +122,9 @@ public static class ConfigLoader
 # AffinitySetter configuration
 # Format: process_substring:cpu_list
 # Example:
-msedge:8-15
-CrRenderer:4-7
-steamwebhelper:0-3
+# msedge:8-15
+# CrRenderer:4-7
+# steamwebhelper:0-3
 """);
         }
         catch (Exception ex)

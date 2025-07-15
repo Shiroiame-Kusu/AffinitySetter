@@ -1,5 +1,7 @@
+
 using System.Runtime.InteropServices;
 using AffinitySetter.Config;
+using AffinitySetter.Type;
 
 namespace AffinitySetter.Utils;
 internal sealed class ThreadScanner
@@ -7,6 +9,7 @@ internal sealed class ThreadScanner
     private readonly ConfigManager _configManager;
     private readonly HashSet<int> _processedTids = new();
     private readonly Dictionary<int, string> _exePathCache = new();
+    private readonly Dictionary<int, string> _cmdLineCache = new();
     
     public ThreadScanner(ConfigManager configManager)
     {
@@ -31,21 +34,24 @@ internal sealed class ThreadScanner
                 continue;
 
             string? exePath = GetExecutablePath(pid);
+            string? cmdLine = GetCommandLine(pid);
             string taskDir = Path.Combine(pidDir, "task");
             if (!Directory.Exists(taskDir)) 
                 continue;
 
-            ProcessThreads(pid, procName, exePath, taskDir, rules);
+            ProcessThreads(pid, procName, exePath, cmdLine, taskDir, rules);
         }
         
         // 定期清理缓存（每10分钟）
         if (DateTime.Now.Minute % 10 == 0)
         {
             _exePathCache.Clear();
+            _cmdLineCache.Clear();
         }
     }
 
-    private void ProcessThreads(int pid, string procName, string? exePath, string taskDir, IReadOnlyList<AffinityRule> rules)
+    private void ProcessThreads(int pid, string procName, string? exePath, string? cmdLine, 
+                                 string taskDir, IReadOnlyList<AffinityRule> rules)
     {
         foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
         {
@@ -56,33 +62,44 @@ internal sealed class ThreadScanner
                 continue;
 
             _processedTids.Add(tid);
-            ApplyAffinityRules(tid, pid, procName, exePath, rules);
+            ApplyAffinityRules(tid, pid, procName, exePath, cmdLine, rules);
         }
     }
 
-    private void ApplyAffinityRules(int tid, int pid, string procName, string? exePath, IReadOnlyList<AffinityRule> rules)
+
+    private void ApplyAffinityRules(int tid, int pid, string procName, string? exePath, string? cmdLine, IReadOnlyList<AffinityRule> rules)
     {
         foreach (var rule in rules)
         {
             bool match = false;
-            
-            if (rule.Type == "name")
+        
+            switch (rule.Type)
             {
-                // 进程名匹配
-                match = procName.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
-            }
-            else if (rule.Type == "path" && exePath != null)
-            {
-                // 可执行路径匹配
-                match = exePath.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                case RuleType.ProcessName:
+                    match = procName.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                    break;
+                
+                case RuleType.ExecutablePath when exePath != null:
+                    match = exePath.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                    break;
+                
+                case RuleType.CommandLine when cmdLine != null:
+                    match = CommandLineUtils.IsMatch(cmdLine, rule.Pattern, rule.IsRegex);
+                    break;
             }
 
             if (match)
             {
                 if (rule.Apply(tid))
                 {
-                    var target = rule.Type == "name" ? procName : exePath;
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Set affinity for PID:{pid} TID:{tid} ({target}): CPUs {string.Join(",", rule.Cpus)}");
+                    string typeName = rule.Type switch {
+                        RuleType.ProcessName => "Name",
+                        RuleType.ExecutablePath => "Path",
+                        RuleType.CommandLine => "Command",
+                        _ => "Unknown"
+                    };
+                
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Set affinity for PID:{pid} TID:{tid} ({typeName}:{rule.Pattern}): CPUs {string.Join(",", rule.Cpus)}");
                 }
                 else
                 {
@@ -95,7 +112,6 @@ internal sealed class ThreadScanner
 
     private string? GetExecutablePath(int pid)
     {
-        // 使用缓存提高性能
         if (_exePathCache.TryGetValue(pid, out var cachedPath))
             return cachedPath;
         
@@ -110,10 +126,28 @@ internal sealed class ThreadScanner
                 return fullPath;
             }
         }
-        catch (Exception ex)
+        catch
         {
-            // 权限问题或其他异常
-            //Console.WriteLine($"⚠️ Failed to get exe path for PID {pid}: {ex.Message}");
+            // 忽略错误
+        }
+        
+        return null;
+    }
+
+    private string? GetCommandLine(int pid)
+    {
+        if (_cmdLineCache.TryGetValue(pid, out var cachedCmd))
+            return cachedCmd;
+        
+        string? cmdLine = CommandLineUtils.GetCommandLine(pid);
+        if (!string.IsNullOrEmpty(cmdLine))
+        {
+            // 缩短长命令行（显示前200字符）
+            string displayCmd = cmdLine.Length > 200 ? 
+                cmdLine[..200] + "..." : cmdLine;
+                
+            _cmdLineCache[pid] = displayCmd;
+            return displayCmd;
         }
         
         return null;
@@ -124,12 +158,8 @@ internal sealed class ThreadScanner
         try
         {
             foreach (var line in File.ReadLines(statusPath))
-            {
                 if (line.StartsWith("Name:"))
-                {
                     return line.Substring(5).Trim();
-                }
-            }
         }
         catch { }
         return null;

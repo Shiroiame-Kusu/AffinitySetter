@@ -1,10 +1,12 @@
 using System.Text.Json.Serialization;
+using AffinitySetter.Type;
 namespace AffinitySetter.Utils;
 
 internal sealed class AffinityRule
 {
     [JsonPropertyName("type")]
-    public string Type { get; set; }
+    [JsonConverter(typeof(RuleTypeConverter))]
+    public RuleType Type { get; set; }
     
     [JsonPropertyName("pattern")]
     public string Pattern { get; set; } = "";
@@ -14,10 +16,15 @@ internal sealed class AffinityRule
     
     [JsonIgnore]
     public byte[] Mask { get; private set; } = Array.Empty<byte>();
+    
+    [JsonIgnore]
+    public bool IsRegex { get; private set; }
 
     public void Initialize()
     {
         Mask = CpuUtils.BuildCpuMask(Cpus);
+        // 检查是否为正则表达式（以/开头和结尾）
+        IsRegex = Pattern.StartsWith("/") && Pattern.EndsWith("/");
     }
 
     public bool Apply(int tid)

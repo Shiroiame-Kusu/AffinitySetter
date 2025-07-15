@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AffinitySetter.Type;
 using AffinitySetter.Utils;
 
 namespace AffinitySetter.Config;
@@ -66,7 +67,7 @@ internal sealed class ConfigManager : IDisposable
             {
                 new AffinityRule
                 {
-                    Type = "name",
+                    Type = RuleType.ProcessName,
                     Pattern = "example",
                     Cpus = new[] {0, 1}
                 }
@@ -100,8 +101,15 @@ internal sealed class ConfigManager : IDisposable
         Console.WriteLine("Loaded configuration:");
         foreach (var rule in _rules)
         {
-            var type = rule.Type;
-            Console.WriteLine($"  {type}: {rule.Pattern} -> CPUs {string.Join(",", rule.Cpus)}");
+            string typeName = rule.Type switch {
+                RuleType.ProcessName => "Name",
+                RuleType.ExecutablePath => "Path",
+                RuleType.CommandLine => "Command",
+                _ => "Unknown"
+            };
+        
+            string patternType = rule.IsRegex ? "Regex" : "Text";
+            Console.WriteLine($"  {typeName} ({patternType}): {rule.Pattern} -> CPUs {string.Join(",", rule.Cpus)}");
         }
     }
 

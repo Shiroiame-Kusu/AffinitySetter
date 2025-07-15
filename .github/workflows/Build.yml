@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    paths:
+      - "**.cs"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  BuildForLinux:
+    runs-on: Debian-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write Build info
+        shell: bash
+        run: |
+          echo GITHUB ACTION #${{github.run_number}} >${{ github.workspace }}\buildinfo.info
+          echo %date% %time% >>${{ github.workspace }}\buildinfo.info
+          echo ${{github.ref}} ${{github.sha}}>>${{ github.workspace }}\buildinfo.info
+          
+      - name: Build the project(Publish,Single File)
+        run: |
+          dotnet clean
+          dotnet publish -c Release -r linux-x64 /p:PublishAot=true /p:PublishSingleFile=true /p:IncludeContentInSingleFile=true /p:Configuration=Release --sc
+
+      - name: Upload AffinitySetter(Publish,Single File)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AffinitySetter_dotnet9_publish_SingleFile
+          path: ${{ github.workspace }}/bin/Release/net9.0/linux-x64/publish
+          if-no-files-found: ignore
+
+  

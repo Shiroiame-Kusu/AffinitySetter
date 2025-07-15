@@ -1,20 +1,28 @@
-
+using System.Text.Json.Serialization;
 namespace AffinitySetter.Utils;
+
 internal sealed class AffinityRule
 {
-    public string Name { get; }
-    public int[] Cpus { get; }
-    public byte[] Mask { get; }
+    [JsonPropertyName("type")]
+    public string Type { get; set; }
+    
+    [JsonPropertyName("pattern")]
+    public string Pattern { get; set; } = "";
+    
+    [JsonPropertyName("cpus")]
+    public int[] Cpus { get; set; } = Array.Empty<int>();
+    
+    [JsonIgnore]
+    public byte[] Mask { get; private set; } = Array.Empty<byte>();
 
-    public AffinityRule(string name, int[] cpus)
+    public void Initialize()
     {
-        Name = name;
-        Cpus = cpus;
-        Mask = CpuUtils.BuildCpuMask(cpus);
+        Mask = CpuUtils.BuildCpuMask(Cpus);
     }
 
     public bool Apply(int tid)
     {
+        if (Mask.Length == 0) return false;
         int result = CpuUtils.sched_setaffinity(tid, (IntPtr)Mask.Length, Mask);
         return result == 0;
     }

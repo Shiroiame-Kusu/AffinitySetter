@@ -1,9 +1,6 @@
-using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace AffinitySetter.Utils;
-
 internal static class CpuUtils
 {
     public static byte[] BuildCpuMask(int[] cpus)

@@ -6,6 +6,7 @@ internal sealed class ThreadScanner
 {
     private readonly ConfigManager _configManager;
     private readonly HashSet<int> _processedTids = new();
+    private readonly Dictionary<int, string> _exePathCache = new();
     
     public ThreadScanner(ConfigManager configManager)
     {
@@ -29,15 +30,22 @@ internal sealed class ThreadScanner
             if (procName == null) 
                 continue;
 
+            string? exePath = GetExecutablePath(pid);
             string taskDir = Path.Combine(pidDir, "task");
             if (!Directory.Exists(taskDir)) 
                 continue;
 
-            ProcessThreads(pid, procName, taskDir, rules);
+            ProcessThreads(pid, procName, exePath, taskDir, rules);
+        }
+        
+        // 定期清理缓存（每10分钟）
+        if (DateTime.Now.Minute % 10 == 0)
+        {
+            _exePathCache.Clear();
         }
     }
 
-    private void ProcessThreads(int pid, string procName, string taskDir, IReadOnlyDictionary<string, AffinityRule> rules)
+    private void ProcessThreads(int pid, string procName, string? exePath, string taskDir, IReadOnlyList<AffinityRule> rules)
     {
         foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
         {
@@ -48,27 +56,67 @@ internal sealed class ThreadScanner
                 continue;
 
             _processedTids.Add(tid);
-            ApplyAffinityRules(tid, pid, procName, rules);
+            ApplyAffinityRules(tid, pid, procName, exePath, rules);
         }
     }
 
-    private void ApplyAffinityRules(int tid, int pid, string procName, IReadOnlyDictionary<string, AffinityRule> rules)
+    private void ApplyAffinityRules(int tid, int pid, string procName, string? exePath, IReadOnlyList<AffinityRule> rules)
     {
         foreach (var rule in rules)
         {
-            if (procName.IndexOf(rule.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+            bool match = false;
+            
+            if (rule.Type == "name")
             {
-                if (rule.Value.Apply(tid))
+                // 进程名匹配
+                match = procName.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            else if (rule.Type == "path" && exePath != null)
+            {
+                // 可执行路径匹配
+                match = exePath.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            if (match)
+            {
+                if (rule.Apply(tid))
                 {
-                    Console.WriteLine($"[{DateTime.Now}] Set affinity for PID:{pid} TID:{tid} ({procName}): CPUs {string.Join(",", rule.Value.Cpus)}");
+                    var target = rule.Type == "name" ? procName : exePath;
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Set affinity for PID:{pid} TID:{tid} ({target}): CPUs {string.Join(",", rule.Cpus)}");
                 }
                 else
                 {
-                    Console.WriteLine($"[{DateTime.Now}] ❌ ERR:{Marshal.GetLastWin32Error()} Set affinity for PID:{pid} TID:{tid} ({procName}): CPUs {string.Join(",", rule.Value.Cpus)}");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ ERR:{Marshal.GetLastWin32Error()} Set affinity for PID:{pid} TID:{tid} ({procName}): CPUs {string.Join(",", rule.Cpus)}");
                 }
                 return; // 只应用第一个匹配的规则
             }
         }
+    }
+
+    private string? GetExecutablePath(int pid)
+    {
+        // 使用缓存提高性能
+        if (_exePathCache.TryGetValue(pid, out var cachedPath))
+            return cachedPath;
+        
+        try
+        {
+            string exeLink = $"/proc/{pid}/exe";
+            var target = File.ResolveLinkTarget(exeLink, true);
+            if (target != null)
+            {
+                string fullPath = target.FullName;
+                _exePathCache[pid] = fullPath;
+                return fullPath;
+            }
+        }
+        catch (Exception ex)
+        {
+            // 权限问题或其他异常
+            //Console.WriteLine($"⚠️ Failed to get exe path for PID {pid}: {ex.Message}");
+        }
+        
+        return null;
     }
 
     private static string? ReadNameFromStatus(string statusPath)
@@ -76,8 +124,12 @@ internal sealed class ThreadScanner
         try
         {
             foreach (var line in File.ReadLines(statusPath))
+            {
                 if (line.StartsWith("Name:"))
+                {
                     return line.Substring(5).Trim();
+                }
+            }
         }
         catch { }
         return null;

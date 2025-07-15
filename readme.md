@@ -1,24 +1,47 @@
-## Affinity Setter
-As it said, set CPU affinity for process and make it persistant.
+# 🧩 Affinity Setter
 
-## Usage
-```
-sudo ./AffinitySetter
-```
-And then it will start, pretty simple huh?
-Actually, if you run it first time, it will trying to save example config to ```/etc/AffinitySetter.conf``` like 
-```
+Easily set and persist CPU affinity (and I/O priority!) for your processes on Linux.  
+Make sure your apps run on the CPUs you want, every time! 🚀
+
+---
+
+## ⚡️ Usage
+
+1. **Start the tool:** ```sudo ./AffinitySetter```  
+The first run will create an example config at `/etc/AffinitySetter.conf`: ```AffinitySetter configuration```
+
+2. **Edit the config:**  
+   Add or modify rules in `/etc/AffinitySetter.conf` to suit your needs.
+
+3. **Add a new rule via command:**  
+```sudo ./AffinitySetter save <rulename> <cpulist></cpulist></rulename>```
+- `<RuleName>`: Any name you like (e.g., `MyAppRule`)
+    - `<CPUList>`: CPUs to use (e.g., `0-3,5`)
+
+---
+
+## 🛠 Features
+
+- Set CPU affinity for processes and threads
+- Persist your settings across reboots
+- Set I/O priority (see config for options) ⚙️
+
+---
+
+## 📝 Example Config
+
+```ini
 # AffinitySetter configuration
-# Format: process_substring:cpu_list
-# Example:
-# example:0-1
+[my_app]
+cpulist = 0-3
+io_priority_class = 2   # 1: realtime, 2: best-effort, 3: idle
+io_priority_data = 4    # 0-7
 ```
-if you want to add more, just simply edit this config file or use
-```
-sudo ./AffinitySetter save Whateveryouwant 0-1024
-```
-Whateveryouwant means Whateveryouwant
+### 💡 Tips
 
-0-1024 means the cpulist you want to use.
+Edit `/etc/AffinitySetter.conf` to add more rules.
+Use save to quickly add new rules from the command line.
 
-That's all.
+That’s all! 🎉
+
+Questions or issues? Open an issue on GitHub!

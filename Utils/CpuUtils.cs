@@ -52,4 +52,7 @@ internal static class CpuUtils
 
     [DllImport("libc", SetLastError = true)]
     public static extern int sched_setaffinity(int pid, IntPtr cpusetsize, byte[] mask);
+    // In Utils/CpuUtils.cs
+    [DllImport("libc", SetLastError = true)]
+    public static extern int ioprio_set(int which, int who, int ioprio);
 }

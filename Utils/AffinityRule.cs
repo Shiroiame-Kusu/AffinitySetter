@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using AffinitySetter.Type;
+#pragma warning disable CS8629 // Nullable value type may be null.
 namespace AffinitySetter.Utils;
 
 internal sealed class AffinityRule
@@ -13,13 +14,19 @@ internal sealed class AffinityRule
     
     [JsonPropertyName("cpus")]
     public int[] Cpus { get; set; } = Array.Empty<int>();
-    
+    [JsonPropertyName("iopriorityclass")]
+    public int? IoPriorityClass { get; set; } // 1: realtime, 2: best-effort, 3: idle
+    [JsonPropertyName("ioprioritydata")]
+    public int? IoPriorityData { get; set; }  // 0-7
     [JsonIgnore]
     public byte[] Mask { get; private set; } = Array.Empty<byte>();
     
     [JsonIgnore]
     public bool IsRegex { get; private set; }
-
+    [JsonIgnore]
+    public bool HasIoPriority => IoPriorityClass.HasValue && IoPriorityData.HasValue;
+    
+   
     public void Initialize()
     {
         Mask = CpuUtils.BuildCpuMask(Cpus);
@@ -32,5 +39,11 @@ internal sealed class AffinityRule
         if (Mask.Length == 0) return false;
         int result = CpuUtils.sched_setaffinity(tid, (IntPtr)Mask.Length, Mask);
         return result == 0;
+    }
+    public void ApplyIoPriority(int tid)
+    {
+        if (!HasIoPriority) return;
+        int ioprio = ((IoPriorityClass.Value & 0x7) << 13) | (IoPriorityData.Value & 0x1fff);
+        CpuUtils.ioprio_set(1, tid, ioprio); // 1: process/thread
     }
 }

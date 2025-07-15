@@ -49,19 +49,60 @@ internal sealed class ThreadScanner
             _cmdLineCache.Clear();
         }
     }
+    // ThreadScanner.cs (Parallel scan)
+    public async Task ScanProcessesAsync()
+    {
+        var rules = _configManager.GetRules();
+        var pidDirs = Directory.EnumerateDirectories("/proc")
+            .Where(d => int.TryParse(Path.GetFileName(d), out _))
+            .ToList();
+
+        var tasks = pidDirs.Select(pidDir => Task.Run(() => ProcessPid(pidDir, rules)));
+        await Task.WhenAll(tasks);
+
+        if (DateTime.Now.Minute % 10 == 0)
+        {
+            _exePathCache.Clear();
+            _cmdLineCache.Clear();
+        }
+    }
+
+    private void ProcessPid(string pidDir, IReadOnlyList<AffinityRule> rules)
+    {
+        if (!int.TryParse(Path.GetFileName(pidDir), out int pid)) 
+            return;
+
+        string statusPath = Path.Combine(pidDir, "status");
+        if (!File.Exists(statusPath)) 
+            return;
+
+        string? procName = ReadNameFromStatus(statusPath);
+        if (procName == null) 
+            return;
+
+        string? exePath = GetExecutablePath(pid);
+        string? cmdLine = GetCommandLine(pid);
+        string taskDir = Path.Combine(pidDir, "task");
+        if (!Directory.Exists(taskDir)) 
+            return;
+
+        ProcessThreads(pid, procName, exePath, cmdLine, taskDir, rules);
+    }
 
     private void ProcessThreads(int pid, string procName, string? exePath, string? cmdLine, 
-                                 string taskDir, IReadOnlyList<AffinityRule> rules)
+        string taskDir, IReadOnlyList<AffinityRule> rules)
     {
         foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
         {
             if (!int.TryParse(Path.GetFileName(tidDir), out int tid)) 
                 continue;
 
-            if (_processedTids.Contains(tid)) 
-                continue;
-
-            _processedTids.Add(tid);
+            lock (_processedTids)
+            {
+                if (_processedTids.Contains(tid)) 
+                    continue;
+                _processedTids.Add(tid);
+            }
             ApplyAffinityRules(tid, pid, procName, exePath, cmdLine, rules);
         }
     }
@@ -98,6 +139,8 @@ internal sealed class ThreadScanner
                         RuleType.CommandLine => "Command",
                         _ => "Unknown"
                     };
+                    if (rule.HasIoPriority)
+                        rule.ApplyIoPriority(tid);
                 
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Set affinity for PID:{pid} TID:{tid} ({typeName}:{rule.Pattern}): CPUs {string.Join(",", rule.Cpus)}");
                 }
@@ -158,8 +201,10 @@ internal sealed class ThreadScanner
         try
         {
             foreach (var line in File.ReadLines(statusPath))
+            {
                 if (line.StartsWith("Name:"))
                     return line.Substring(5).Trim();
+            }
         }
         catch { }
         return null;

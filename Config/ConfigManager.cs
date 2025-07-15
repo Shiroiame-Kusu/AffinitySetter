@@ -65,7 +65,7 @@ internal sealed class ConfigManager : IDisposable
             Console.WriteLine("🛠️ Creating default configuration...");
             var defaultRules = new List<AffinityRule>
             {
-                new AffinityRule
+                new()
                 {
                     Type = RuleType.ProcessName,
                     Pattern = "example",

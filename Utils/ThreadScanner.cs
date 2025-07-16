@@ -1,4 +1,3 @@
-
 using System.Runtime.InteropServices;
 using AffinitySetter.Config;
 using AffinitySetter.Type;
@@ -10,6 +9,7 @@ internal sealed class ThreadScanner
     private readonly HashSet<int> _processedTids = new();
     private readonly Dictionary<int, string> _exePathCache = new();
     private readonly Dictionary<int, string> _cmdLineCache = new();
+    private readonly object _cacheLock = new();
     
     public ThreadScanner(ConfigManager configManager)
     {
@@ -42,12 +42,7 @@ internal sealed class ThreadScanner
             ProcessThreads(pid, procName, exePath, cmdLine, taskDir, rules);
         }
         
-        // 定期清理缓存（每10分钟）
-        if (DateTime.Now.Minute % 10 == 0)
-        {
-            _exePathCache.Clear();
-            _cmdLineCache.Clear();
-        }
+        ClearCachesIfNeeded();
     }
     // ThreadScanner.cs (Parallel scan)
     public async Task ScanProcessesAsync()
@@ -60,11 +55,7 @@ internal sealed class ThreadScanner
         var tasks = pidDirs.Select(pidDir => Task.Run(() => ProcessPid(pidDir, rules)));
         await Task.WhenAll(tasks);
 
-        if (DateTime.Now.Minute % 10 == 0)
-        {
-            _exePathCache.Clear();
-            _cmdLineCache.Clear();
-        }
+        ClearCachesIfNeeded();
     }
 
     private void ProcessPid(string pidDir, IReadOnlyList<AffinityRule> rules)
@@ -141,7 +132,8 @@ internal sealed class ThreadScanner
                     };
                     if (rule.HasIoPriority)
                         rule.ApplyIoPriority(tid);
-                
+                    if(rule.HasNicePriority)
+                        rule.ApplyNice(tid);
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Set affinity for PID:{pid} TID:{tid} ({typeName}:{rule.Pattern}): CPUs {string.Join(",", rule.Cpus)}");
                 }
                 else
@@ -155,9 +147,11 @@ internal sealed class ThreadScanner
 
     private string? GetExecutablePath(int pid)
     {
-        if (_exePathCache.TryGetValue(pid, out var cachedPath))
-            return cachedPath;
-        
+        lock (_cacheLock)
+        {
+            if (_exePathCache.TryGetValue(pid, out var cachedPath))
+                return cachedPath;
+        }
         try
         {
             string exeLink = $"/proc/{pid}/exe";
@@ -165,7 +159,10 @@ internal sealed class ThreadScanner
             if (target != null)
             {
                 string fullPath = target.FullName;
-                _exePathCache[pid] = fullPath;
+                lock (_cacheLock)
+                {
+                    _exePathCache[pid] = fullPath;
+                }
                 return fullPath;
             }
         }
@@ -173,26 +170,27 @@ internal sealed class ThreadScanner
         {
             // 忽略错误
         }
-        
         return null;
     }
 
     private string? GetCommandLine(int pid)
     {
-        if (_cmdLineCache.TryGetValue(pid, out var cachedCmd))
-            return cachedCmd;
-        
+        lock (_cacheLock)
+        {
+            if (_cmdLineCache.TryGetValue(pid, out var cachedCmd))
+                return cachedCmd;
+        }
         string? cmdLine = CommandLineUtils.GetCommandLine(pid);
         if (!string.IsNullOrEmpty(cmdLine))
         {
-            // 缩短长命令行（显示前200字符）
             string displayCmd = cmdLine.Length > 200 ? 
                 cmdLine[..200] + "..." : cmdLine;
-                
-            _cmdLineCache[pid] = displayCmd;
+            lock (_cacheLock)
+            {
+                _cmdLineCache[pid] = displayCmd;
+            }
             return displayCmd;
         }
-        
         return null;
     }
 
@@ -208,5 +206,25 @@ internal sealed class ThreadScanner
         }
         catch { }
         return null;
+    }
+
+    public void ClearCachesIfNeeded()
+    {
+        if (DateTime.Now.Minute % 10 == 0)
+        {
+            lock (_cacheLock)
+            {
+                _exePathCache.Clear();
+                _cmdLineCache.Clear();
+            }
+        }
+    }
+
+    public void ClearProcessed()
+    {
+        lock (_processedTids)
+        {
+            _processedTids.Clear();
+        }
     }
 }

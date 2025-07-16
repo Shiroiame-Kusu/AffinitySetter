@@ -55,4 +55,7 @@ internal static class CpuUtils
     // In Utils/CpuUtils.cs
     [DllImport("libc", SetLastError = true)]
     public static extern int ioprio_set(int which, int who, int ioprio);
+    // Utils/CpuUtils.cs
+    [DllImport("libc", SetLastError = true)]
+    public static extern int setpriority(int which, int who, int prio);
 }

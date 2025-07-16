@@ -102,13 +102,19 @@ internal class AffinitySetter
         Console.WriteLine("🌀 AffinitySetter Starting...");
 
         var _configManager = new ConfigManager(ConfigPath);
+        var threadScanner = new ThreadScanner(_configManager);
+        // Subscribe to config reload event to re-apply rules immediately
+        _configManager.ConfigReloaded += async () =>
+        {
+            Console.WriteLine("\n🔁 Applying new rules to running processes...");
+            threadScanner.ClearProcessed(); // Clear processed TIDs so all are re-evaluated
+            await threadScanner.ScanProcessesAsync();
+        };
         if (!_configManager.LoadConfig())
         {
             Console.WriteLine("❌ No valid rules found. Exiting.");
             return 1;
         }
-
-        var threadScanner = new ThreadScanner(_configManager);
 
         while (running)
         {
@@ -119,5 +125,3 @@ internal class AffinitySetter
         return 0;
     }
 }
-
-

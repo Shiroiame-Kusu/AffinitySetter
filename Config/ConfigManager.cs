@@ -9,7 +9,7 @@ internal sealed class ConfigManager : IDisposable
     private List<AffinityRule> _rules = new();
     private FileSystemWatcher _configWatcher;
     private Timer _reloadTimer;
-    private readonly object _lock = new object();
+    private readonly object _lock = new();
     private const int ReloadDelay = 500;
 
     public ConfigManager(string configFilePath)
@@ -38,6 +38,8 @@ internal sealed class ConfigManager : IDisposable
                 foreach (var rule in newRules)
                 {
                     rule.Initialize();
+                    if (rule.Nice == null)
+                        rule.Nice = 0;
                 }
                 
                 if (newRules.Count == 0)
@@ -156,6 +158,7 @@ internal sealed class ConfigManager : IDisposable
             if (LoadConfig())
             {
                 Console.WriteLine("✅ Configuration reloaded successfully");
+                ConfigReloaded?.Invoke();
             }
             else
             {
@@ -167,6 +170,8 @@ internal sealed class ConfigManager : IDisposable
             Console.WriteLine($"⚠️ Reload error: {ex.Message}");
         }
     }
+
+    public event Action? ConfigReloaded;
 
     public void Dispose()
     {

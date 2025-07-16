@@ -9,7 +9,7 @@ on:
 
 jobs:
   BuildForLinux:
-    runs-on: Debian-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -20,13 +20,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 9.0.x
-
-      - name: Write Build info
-        shell: bash
-        run: |
-          echo GITHUB ACTION #${{github.run_number}} >${{ github.workspace }}\buildinfo.info
-          echo %date% %time% >>${{ github.workspace }}\buildinfo.info
-          echo ${{github.ref}} ${{github.sha}}>>${{ github.workspace }}\buildinfo.info
           
       - name: Build the project(Publish,Single File)
         run: |

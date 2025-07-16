@@ -12,6 +12,10 @@ internal class AffinitySetter
     // AffinitySetter.cs (Main loop)
     public static async Task<int> Main(string[] args)
     {   
+        // Redirect Console.WriteLine to also log to a file
+        var logPath = Path.Combine("/var/log", $"AffinitySetter-{DateTime.Now:yyyyMMdd_HHmmss}.log");
+        Console.SetOut(new LogWriter(logPath));
+
         Console.WriteLine($"AffinitySetter {Global.Version}");
         if (args.Length >= 1)
         {
@@ -103,12 +107,36 @@ internal class AffinitySetter
 
         var _configManager = new ConfigManager(ConfigPath);
         var threadScanner = new ThreadScanner(_configManager);
-        // Subscribe to config reload event to re-apply rules immediately
-        _configManager.ConfigReloaded += async () =>
+        // Remove ConfigReloaded event handler, only use RulesChanged for selective re-application
+        // _configManager.ConfigReloaded += async () =>
+        // {
+        //     Console.WriteLine("\n🔁 Applying new rules to running processes...");
+        //     threadScanner.ClearProcessed();
+        //     await threadScanner.ScanProcessesAsync();
+        // };
+        // Subscribe to RulesChanged event to only apply new/changed rules
+        _configManager.RulesChanged += (oldRules, newRules) =>
         {
-            Console.WriteLine("\n🔁 Applying new rules to running processes...");
-            threadScanner.ClearProcessed(); // Clear processed TIDs so all are re-evaluated
-            await threadScanner.ScanProcessesAsync();
+            var changedRules = newRules.Where(newRule =>
+                !oldRules.Any(oldRule =>
+                    oldRule.Type == newRule.Type &&
+                    oldRule.Pattern == newRule.Pattern &&
+                    oldRule.Cpus.SequenceEqual(newRule.Cpus) &&
+                    oldRule.Nice == newRule.Nice &&
+                    oldRule.IoPriorityClass == newRule.IoPriorityClass &&
+                    oldRule.IoPriorityData == newRule.IoPriorityData
+                )
+            ).ToList();
+            if (changedRules.Count == 0)
+            {
+                Console.WriteLine("No new or changed rules to apply.");
+                return;
+            }
+            foreach (var rule in changedRules)
+            {
+                int count = threadScanner.ApplyRuleToAllMatchingProcesses(rule);
+                Console.WriteLine($"[RulesChanged] Applied rule '{rule.Pattern}' to {count} threads.");
+            }
         };
         if (!_configManager.LoadConfig())
         {

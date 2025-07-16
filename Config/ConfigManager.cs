@@ -155,9 +155,15 @@ internal sealed class ConfigManager : IDisposable
         try
         {
             Console.WriteLine("\n🔄 Reloading configuration...");
+            List<AffinityRule> oldRules;
+            lock (_lock)
+            {
+                oldRules = new List<AffinityRule>(_rules);
+            }
             if (LoadConfig())
             {
                 Console.WriteLine("✅ Configuration reloaded successfully");
+                RulesChanged?.Invoke(oldRules, GetRules());
                 ConfigReloaded?.Invoke();
             }
             else
@@ -172,6 +178,7 @@ internal sealed class ConfigManager : IDisposable
     }
 
     public event Action? ConfigReloaded;
+    public event Action<IReadOnlyList<AffinityRule>, IReadOnlyList<AffinityRule>>? RulesChanged;
 
     public void Dispose()
     {

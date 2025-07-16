@@ -227,4 +227,55 @@ internal sealed class ThreadScanner
             _processedTids.Clear();
         }
     }
+
+    public int ApplyRuleToAllMatchingProcesses(AffinityRule rule)
+    {
+        int appliedCount = 0;
+        foreach (var pidDir in Directory.EnumerateDirectories("/proc"))
+        {
+            if (!int.TryParse(Path.GetFileName(pidDir), out int pid))
+                continue;
+            string statusPath = Path.Combine(pidDir, "status");
+            if (!File.Exists(statusPath))
+                continue;
+            string? procName = ReadNameFromStatus(statusPath);
+            if (procName == null)
+                continue;
+            string? exePath = GetExecutablePath(pid);
+            string? cmdLine = GetCommandLine(pid);
+            string taskDir = Path.Combine(pidDir, "task");
+            if (!Directory.Exists(taskDir))
+                continue;
+            foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
+            {
+                if (!int.TryParse(Path.GetFileName(tidDir), out int tid))
+                    continue;
+                bool match = false;
+                switch (rule.Type)
+                {
+                    case RuleType.ProcessName:
+                        match = procName.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                        break;
+                    case RuleType.ExecutablePath when exePath != null:
+                        match = exePath.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                        break;
+                    case RuleType.CommandLine when cmdLine != null:
+                        match = CommandLineUtils.IsMatch(cmdLine, rule.Pattern, rule.IsRegex);
+                        break;
+                }
+                if (match)
+                {
+                    if (rule.Apply(tid))
+                    {
+                        if (rule.HasIoPriority)
+                            rule.ApplyIoPriority(tid);
+                        if (rule.HasNicePriority)
+                            rule.ApplyNice(tid);
+                        appliedCount++;
+                    }
+                }
+            }
+        }
+        return appliedCount;
+    }
 }

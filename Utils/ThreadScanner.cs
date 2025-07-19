@@ -80,21 +80,25 @@ internal sealed class ThreadScanner
         ProcessThreads(pid, procName, exePath, cmdLine, taskDir, rules);
     }
 
-    private void ProcessThreads(int pid, string procName, string? exePath, string? cmdLine, 
-        string taskDir, IReadOnlyList<AffinityRule> rules)
+    private void ProcessThreads(int pid, string procName, string? exePath, string? cmdLine, string taskDir, IReadOnlyList<AffinityRule> rules)
     {
+        if (!Directory.Exists(taskDir))
+            return; // Handle missing directory gracefully
+
         foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
         {
-            if (!int.TryParse(Path.GetFileName(tidDir), out int tid)) 
+            var tidName = Path.GetFileName(tidDir);
+            if (!int.TryParse(tidName, out int tid)) 
                 continue;
 
             lock (_processedTids)
             {
                 if (_processedTids.Contains(tid)) 
                     continue;
-                _processedTids.Add(tid);
+                _processedTids.Add(tid); // Add returns false if already exists
             }
             ApplyAffinityRules(tid, pid, procName, exePath, cmdLine, rules);
+            
         }
     }
 
@@ -277,5 +281,57 @@ internal sealed class ThreadScanner
             }
         }
         return appliedCount;
+    }
+    
+    // In Utils/ThreadScanner.cs
+    public int ResetRuleForAllMatchingProcesses(AffinityRule rule)
+    {
+        int resetCount = 0;
+        foreach (var pidDir in Directory.EnumerateDirectories("/proc"))
+        {
+            if (!int.TryParse(Path.GetFileName(pidDir), out int pid))
+                continue;
+            string statusPath = Path.Combine(pidDir, "status");
+            if (!File.Exists(statusPath))
+                continue;
+            string? procName = ReadNameFromStatus(statusPath);
+            if (procName == null)
+                continue;
+            string? exePath = GetExecutablePath(pid);
+            string? cmdLine = GetCommandLine(pid);
+            string taskDir = Path.Combine(pidDir, "task");
+            if (!Directory.Exists(taskDir))
+                continue;
+            foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
+            {
+                if (!int.TryParse(Path.GetFileName(tidDir), out int tid))
+                    continue;
+                bool match = false;
+                switch (rule.Type)
+                {
+                    case RuleType.ProcessName:
+                        match = procName.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                        break;
+                    case RuleType.ExecutablePath when exePath != null:
+                        match = exePath.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                        break;
+                    case RuleType.CommandLine when cmdLine != null:
+                        match = CommandLineUtils.IsMatch(cmdLine, rule.Pattern, rule.IsRegex);
+                        break;
+                }
+                if (match)
+                {
+                    // Reset affinity to all CPUs (default)
+                    var defaultMask = CpuUtils.BuildCpuMask(Enumerable.Range(0, Environment.ProcessorCount).ToArray());
+                    CpuUtils.sched_setaffinity(tid, (IntPtr)defaultMask.Length, defaultMask);
+                    // Reset nice to 0
+                    CpuUtils.setpriority(0, tid, 0);
+                    // Optionally reset I/O priority to best-effort (class 2, data 4)
+                    CpuUtils.ioprio_set(1, tid, (2 << 13) | 4);
+                    resetCount++;
+                }
+            }
+        }
+        return resetCount;
     }
 }

@@ -104,7 +104,7 @@ internal class AffinitySetter
         }
         Console.CancelKeyPress += (sender, e) => { running = false; e.Cancel = true; Console.WriteLine("\nExiting..."); };
         Console.WriteLine("🌀 AffinitySetter Starting...");
-
+        CrashHandler.Setup();
         var _configManager = new ConfigManager(ConfigPath);
         var threadScanner = new ThreadScanner(_configManager);
         // Remove ConfigReloaded event handler, only use RulesChanged for selective re-application
@@ -127,15 +127,30 @@ internal class AffinitySetter
                     oldRule.IoPriorityData == newRule.IoPriorityData
                 )
             ).ToList();
-            if (changedRules.Count == 0)
+
+            var deletedRules = oldRules.Where(oldRule =>
+                !newRules.Any(newRule =>
+                    newRule.Type == oldRule.Type &&
+                    newRule.Pattern == oldRule.Pattern
+                )
+            ).ToList();
+
+            if (changedRules.Count == 0 && deletedRules.Count == 0)
             {
-                Console.WriteLine("No new or changed rules to apply.");
+                Console.WriteLine("No new, changed, or deleted rules to apply.");
                 return;
             }
+
             foreach (var rule in changedRules)
             {
                 int count = threadScanner.ApplyRuleToAllMatchingProcesses(rule);
-                Console.WriteLine($"[RulesChanged] Applied rule '{rule.Pattern}' to {count} threads.");
+                Console.WriteLine($"🔁 [RulesChanged] Applied rule '{rule.Pattern}' to {count} threads.");
+            }
+
+            foreach (var rule in deletedRules)
+            {
+                int count = threadScanner.ResetRuleForAllMatchingProcesses(rule);
+                Console.WriteLine($"🔁 [RulesChanged] Reset rule '{rule.Pattern}' for {count} threads.");
             }
         };
         if (!_configManager.LoadConfig())

@@ -18,37 +18,6 @@ internal static class CpuUtils
         return mask;
     }
 
-    public static int[] ParseCpuList(string input)
-    {
-        var result = new List<int>();
-        var parts = input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var part in parts)
-        {
-            if (part.Contains('-'))
-            {
-                var bounds = part.Split('-');
-                if (bounds.Length == 2 && 
-                    int.TryParse(bounds[0], out int start) && 
-                    int.TryParse(bounds[1], out int end))
-                {
-                    if (start <= end)
-                    {
-                        for (int i = start; i <= end; i++) 
-                            result.Add(i);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"⚠️ Invalid CPU range: {start}-{end}");
-                    }
-                }
-            }
-            else if (int.TryParse(part, out int cpu))
-            {
-                result.Add(cpu);
-            }
-        }
-        return result.ToArray();
-    }
 
     [DllImport("libc", SetLastError = true)]
     public static extern int sched_setaffinity(int pid, IntPtr cpusetsize, byte[] mask);

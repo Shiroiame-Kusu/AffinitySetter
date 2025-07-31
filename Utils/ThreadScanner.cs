@@ -224,14 +224,6 @@ internal sealed class ThreadScanner
         }
     }
 
-    public void ClearProcessed()
-    {
-        lock (_processedTids)
-        {
-            _processedTids.Clear();
-        }
-    }
-
     public int ApplyRuleToAllMatchingProcesses(AffinityRule rule)
     {
         int appliedCount = 0;
@@ -283,7 +275,6 @@ internal sealed class ThreadScanner
         return appliedCount;
     }
     
-    // In Utils/ThreadScanner.cs
     public int ResetRuleForAllMatchingProcesses(AffinityRule rule)
     {
         int resetCount = 0;

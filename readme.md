@@ -30,13 +30,7 @@ The first run will create an example config at `/etc/AffinitySetter.conf`: ```Af
 
 ## 📝 Example Config
 
-```ini
-# AffinitySetter configuration
-[my_app]
-cpulist = 0-3
-io_priority_class = 2   # 1: realtime, 2: best-effort, 3: idle
-io_priority_data = 4    # 0-7
-```
+see [AffinitySetter.conf](./AffinitySetter.conf)
 ### 💡 Tips
 
 Edit `/etc/AffinitySetter.conf` to add more rules.

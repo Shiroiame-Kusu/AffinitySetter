@@ -85,20 +85,31 @@ internal sealed class ThreadScanner
         if (!Directory.Exists(taskDir))
             return; // Handle missing directory gracefully
 
-        foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
+        try
         {
-            var tidName = Path.GetFileName(tidDir);
-            if (!int.TryParse(tidName, out int tid)) 
-                continue;
-
-            lock (_processedTids)
+            foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
             {
-                if (_processedTids.Contains(tid)) 
+                var tidName = Path.GetFileName(tidDir);
+                if (!int.TryParse(tidName, out int tid)) 
                     continue;
-                _processedTids.Add(tid); // Add returns false if already exists
+
+                lock (_processedTids)
+                {
+                    if (_processedTids.Contains(tid)) 
+                        continue;
+                    _processedTids.Add(tid); // Add returns false if already exists
+                }
+                ApplyAffinityRules(tid, pid, procName, exePath, cmdLine, rules);
+                
             }
-            ApplyAffinityRules(tid, pid, procName, exePath, cmdLine, rules);
-            
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // The task directory disappeared between the check and enumeration; skip this process.
+        }
+        catch (IOException)
+        {
+            // IO error (e.g., process exited); skip this process.
         }
     }
 

@@ -9,7 +9,7 @@ internal sealed class AffinityRule
     [JsonConverter(typeof(RuleTypeConverter))]
     public RuleType Type { get; set; }
     [JsonPropertyName("pattern")] public string Pattern { get; set; } = "";
-    [JsonPropertyName("cpus")] public int[] Cpus { get; set; } = Array.Empty<int>();
+    [JsonPropertyName("cpus")] public int[] Cpus { get; set; } = [];
     [JsonPropertyName("iopriorityclass")] public int? IoPriorityClass { get; set; } // 1: realtime, 2: best-effort, 3: idle
     [JsonPropertyName("ioprioritydata")] public int? IoPriorityData { get; set; }  // 0-7
     [JsonPropertyName("nice")] public int? Nice { get; set; }

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using AffinitySetter.Type;
 using AffinitySetter.Utils;
-
+#pragma warning disable CS8618
 namespace AffinitySetter.Config;
 internal sealed class ConfigManager : IDisposable
 {

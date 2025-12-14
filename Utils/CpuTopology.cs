@@ -130,14 +130,16 @@ internal sealed class CpuTopology
                 if (!processedSiblingGroups.Contains(groupKey))
                 {
                     processedSiblingGroups.Add(groupKey);
+                    int minSibling = siblings.Min();
 
                     if (siblings.Length > 1)
                     {
                         // 有超线程：第一个是物理核心，其余是逻辑线程
-                        physicalCores.Add(siblings.Min());
-                        foreach (var sib in siblings.Where(s => s != siblings.Min()))
+                        physicalCores.Add(minSibling);
+                        foreach (var sib in siblings)
                         {
-                            logicalThreads.Add(sib);
+                            if (sib != minSibling)
+                                logicalThreads.Add(sib);
                         }
                     }
                     else
@@ -194,10 +196,12 @@ internal sealed class CpuTopology
                 {
                     // 有超线程，推测为 P 核心
                     pCores.AddRange(siblings);
-                    pCoresPhysical.Add(siblings.Min());
-                    foreach (var sib in siblings.Where(s => s != siblings.Min()))
+                    int minSibling = siblings.Min();
+                    pCoresPhysical.Add(minSibling);
+                    foreach (var sib in siblings)
                     {
-                        pCoresLogical.Add(sib);
+                        if (sib != minSibling)
+                            pCoresLogical.Add(sib);
                     }
                 }
                 else

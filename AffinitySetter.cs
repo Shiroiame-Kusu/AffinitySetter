@@ -9,11 +9,34 @@ internal class AffinitySetter
     static bool running = true;
 
     private static string ConfigPath = "/etc/AffinitySetter.conf";
+    
+    private static string GetLogPath()
+    {
+        // 优先使用 /var/log（需要 root 权限）
+        string varLogPath = "/var/log";
+        if (Directory.Exists(varLogPath))
+        {
+            try
+            {
+                string testPath = Path.Combine(varLogPath, $".affinitysetter_test_{Environment.ProcessId}");
+                File.WriteAllText(testPath, "test");
+                File.Delete(testPath);
+                return Path.Combine(varLogPath, $"AffinitySetter-{DateTime.Now:yyyyMMdd_HHmmss}.log");
+            }
+            catch { }
+        }
+        
+        // 降级到用户目录
+        string userLogDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "log");
+        Directory.CreateDirectory(userLogDir);
+        return Path.Combine(userLogDir, $"AffinitySetter-{DateTime.Now:yyyyMMdd_HHmmss}.log");
+    }
+    
     // AffinitySetter.cs (Main loop)
     public static async Task<int> Main(string[] args)
     {   
         // Redirect Console.WriteLine to also log to a file
-        var logPath = Path.Combine("/var/log", $"AffinitySetter-{DateTime.Now:yyyyMMdd_HHmmss}.log");
+        var logPath = GetLogPath();
         Console.SetOut(new LogWriter(logPath));
 
         Console.WriteLine($"AffinitySetter {Global.Version}");

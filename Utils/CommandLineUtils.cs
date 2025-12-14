@@ -1,10 +1,15 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 namespace AffinitySetter.Utils;
 internal static class CommandLineUtils
 {
+    // 缓存编译后的正则表达式，避免重复创建
+    private static readonly ConcurrentDictionary<string, Regex?> _regexCache = new();
+    private const int MaxCacheSize = 100;
+    
     public static string? GetCommandLine(int pid)
     {
         try
@@ -44,7 +49,32 @@ internal static class CommandLineUtils
             {
                 // 去掉正则表达式的首尾斜杠
                 string regexPattern = pattern[1..^1];
-                return Regex.IsMatch(commandLine, regexPattern, RegexOptions.IgnoreCase);
+                
+                // 从缓存获取或创建正则表达式
+                var regex = _regexCache.GetOrAdd(regexPattern, p =>
+                {
+                    try
+                    {
+                        return new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                });
+                
+                // 防止缓存无限增长
+                if (_regexCache.Count > MaxCacheSize)
+                {
+                    _regexCache.Clear();
+                }
+                
+                return regex?.IsMatch(commandLine) ?? false;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                Console.WriteLine($"⚠️ Regex timeout: {pattern}");
+                return false;
             }
             catch (Exception ex)
             {

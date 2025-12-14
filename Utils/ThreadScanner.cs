@@ -6,10 +6,14 @@ namespace AffinitySetter.Utils;
 internal sealed class ThreadScanner
 {
     private readonly ConfigManager _configManager;
-    private readonly HashSet<int> _processedTids = new();
+    private HashSet<int> _processedTids = new();
+    private HashSet<int> _currentScanTids = new();
     private readonly Dictionary<int, string> _exePathCache = new();
     private readonly Dictionary<int, string> _cmdLineCache = new();
     private readonly object _cacheLock = new();
+    private readonly object _tidLock = new();
+    private DateTime _lastCacheClear = DateTime.Now;
+    private const int CacheClearIntervalMinutes = 10;
     
     public ThreadScanner(ConfigManager configManager)
     {
@@ -93,11 +97,11 @@ internal sealed class ThreadScanner
                 if (!int.TryParse(tidName, out int tid)) 
                     continue;
 
-                lock (_processedTids)
+                lock (_tidLock)
                 {
-                    if (_processedTids.Contains(tid)) 
-                        continue;
-                    _processedTids.Add(tid); // Add returns false if already exists
+                    _currentScanTids.Add(tid); // 记录当前扫描周期中存在的 TID
+                    if (!_processedTids.Add(tid))
+                        continue; // 已处理过，跳过
                 }
                 ApplyAffinityRules(tid, pid, procName, exePath, cmdLine, rules);
                 
@@ -225,13 +229,21 @@ internal sealed class ThreadScanner
 
     public void ClearCachesIfNeeded()
     {
-        if (DateTime.Now.Minute % 10 == 0)
+        var now = DateTime.Now;
+        if ((now - _lastCacheClear).TotalMinutes >= CacheClearIntervalMinutes)
         {
             lock (_cacheLock)
             {
                 _exePathCache.Clear();
                 _cmdLineCache.Clear();
             }
+            // 清理已处理的 TID 集合，只保留当前扫描周期中存在的 TID
+            lock (_tidLock)
+            {
+                _processedTids = _currentScanTids;
+                _currentScanTids = new HashSet<int>();
+            }
+            _lastCacheClear = now;
         }
     }
 

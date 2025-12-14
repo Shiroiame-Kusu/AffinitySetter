@@ -7,8 +7,8 @@ internal sealed class ConfigManager : IDisposable
 {
     private readonly string _configFilePath;
     private List<AffinityRule> _rules = new();
-    private FileSystemWatcher _configWatcher;
-    private Timer _reloadTimer;
+    private FileSystemWatcher? _configWatcher;
+    private Timer? _reloadTimer;
     private readonly object _lock = new();
     private const int ReloadDelay = 500;
 
@@ -146,8 +146,15 @@ internal sealed class ConfigManager : IDisposable
 
     private void OnConfigChanged(object sender, FileSystemEventArgs e)
     {
-        _reloadTimer?.Dispose();
-        _reloadTimer = new Timer(_ => ReloadConfig(), null, ReloadDelay, Timeout.Infinite);
+        // 使用 Change 重置定时器，而不是创建新的 Timer
+        if (_reloadTimer == null)
+        {
+            _reloadTimer = new Timer(_ => ReloadConfig(), null, ReloadDelay, Timeout.Infinite);
+        }
+        else
+        {
+            _reloadTimer.Change(ReloadDelay, Timeout.Infinite);
+        }
     }
 
     private void ReloadConfig()

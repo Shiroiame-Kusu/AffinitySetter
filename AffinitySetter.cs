@@ -29,7 +29,12 @@ internal class AffinitySetter
                 case "--help":
                 case "-h":
                 case "help":
-                    Console.WriteLine("Usage: AffinitySetter [options]\nOptions:\n  --version, -v   Show version\n  --help, -h      Show this help");
+                    PrintHelp();
+                    return 0;
+                case "topology":
+                case "--topology":
+                case "-t":
+                    PrintTopology();
                     return 0;
                 case "load":
                     if (args.Length == 2)
@@ -166,5 +171,74 @@ internal class AffinitySetter
         }
 
         return 0;
+    }
+
+    private static void PrintHelp()
+    {
+        Console.WriteLine(@"Usage: AffinitySetter [options]
+
+Options:
+  --version, -v     Show version
+  --help, -h        Show this help
+  --topology, -t    Show CPU topology information
+  load <file>       Load configuration from specified file
+  save <name> <cpu> Save a rule for process name with CPU list
+
+CPU Keywords (for use in config 'cpus' field):
+  P, PCore          All P-cores (Performance cores with HT)
+  E, ECore          All E-cores (Efficiency cores)
+  P-physical        P-cores physical threads only (no HT)
+  P-logical, P-HT   P-cores logical threads only (HT siblings)
+  physical, no-HT   All physical cores (first thread of each core)
+  logical, HT       All logical threads (HT siblings only)
+  all               All CPUs
+
+Expressions:
+  Use + to combine, - to exclude
+  Examples: ""P+E"", ""all-logical"", ""P-P-HT"", ""physical+E""
+
+Examples:
+  AffinitySetter                    # Start with default config
+  AffinitySetter load my.conf       # Use custom config file
+  AffinitySetter save firefox P     # Save rule: firefox -> P-cores
+  AffinitySetter save chrome E      # Save rule: chrome -> E-cores
+  AffinitySetter topology           # Show CPU topology info
+");
+    }
+
+    private static void PrintTopology()
+    {
+        var topology = CpuTopology.Instance;
+        Console.WriteLine("\n📊 CPU Topology Summary:");
+        Console.WriteLine($"   Total CPUs: {topology.AllCpus.Length}");
+        Console.WriteLine($"   Physical Cores: {topology.PhysicalCores.Length}");
+        
+        if (topology.HasHyperThreading)
+        {
+            Console.WriteLine($"   Hyper-Threading: Enabled ({topology.LogicalThreads.Length} logical threads)");
+        }
+        else
+        {
+            Console.WriteLine("   Hyper-Threading: Disabled");
+        }
+
+        if (topology.IsHybridCpu)
+        {
+            Console.WriteLine("\n🔥 Hybrid CPU Architecture Detected:");
+            Console.WriteLine($"   P-Cores (Performance): {topology.PCores.Length} threads");
+            Console.WriteLine($"     - Physical: [{string.Join(", ", topology.PCoresPhysical)}]");
+            Console.WriteLine($"     - Logical (HT): [{string.Join(", ", topology.PCoresLogical)}]");
+            Console.WriteLine($"   E-Cores (Efficiency): {topology.ECores.Length} threads");
+            Console.WriteLine($"     - CPUs: [{string.Join(", ", topology.ECores)}]");
+        }
+        else
+        {
+            Console.WriteLine("\n   Standard CPU architecture (no P/E core distinction)");
+        }
+
+        Console.WriteLine("\n📝 Available CPU Keywords for config:");
+        Console.WriteLine("   P, PCore, E, ECore, P-physical, P-logical, P-HT");
+        Console.WriteLine("   physical, no-HT, logical, HT, all");
+        Console.WriteLine("\n   Use + to combine, - to exclude (e.g., \"all-logical\", \"P+E\")");
     }
 }

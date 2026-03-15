@@ -29,71 +29,10 @@ internal sealed class AffinityRule
    
     public void Initialize()
     {
-        Cpus = ParseCpuList(CpusRaw);
+        Cpus = CpuSelectionParser.Parse(CpusRaw);
         Mask = CpuUtils.BuildCpuMask(Cpus);
         // 检查是否为正则表达式（以/开头和结尾）
         IsRegex = Pattern.StartsWith("/") && Pattern.EndsWith("/");
-    }
-
-    // Accepts string ("0,1,2", "0-2", "0,2,4-6", "P", "E", "P-logical", etc.) or int[] ([0,1,2])
-    private static int[] ParseCpuList(object input)
-    {
-        if (input == null) return Array.Empty<int>();
-        
-        // 处理 JsonElement 类型
-        if (input is System.Text.Json.JsonElement elem)
-        {
-            if (elem.ValueKind == System.Text.Json.JsonValueKind.String)
-            {
-                // JsonElement 字符串，递归调用并传入实际字符串值
-                return ParseCpuList(elem.GetString() ?? "");
-            }
-            else if (elem.ValueKind == System.Text.Json.JsonValueKind.Array)
-            {
-                var cpus = new List<int>();
-                foreach (var item in elem.EnumerateArray())
-                {
-                    if (item.TryGetInt32(out int cpu)) cpus.Add(cpu);
-                }
-                return cpus.Distinct().OrderBy(x => x).ToArray();
-            }
-            return Array.Empty<int>();
-        }
-        
-        if (input is string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return Array.Empty<int>();
-            
-            // 首先尝试使用 CPU 拓扑关键字解析
-            var topology = CpuTopology.Instance;
-            var resolved = topology.ResolveCpuExpression(s);
-            if (resolved != null && resolved.Length > 0)
-            {
-                return resolved;
-            }
-            
-            // 否则使用传统的数字解析
-            var cpus = new List<int>();
-            foreach (var part in s.Split(','))
-            {
-                var trimmed = part.Trim();
-                if (trimmed.Contains('-'))
-                {
-                    var range = trimmed.Split('-');
-                    if (range.Length == 2 && int.TryParse(range[0], out int start) && int.TryParse(range[1], out int end) && start <= end)
-                    {
-                        for (int i = start; i <= end; i++) cpus.Add(i);
-                    }
-                }
-                else if (int.TryParse(trimmed, out int cpu))
-                {
-                    cpus.Add(cpu);
-                }
-            }
-            return cpus.Distinct().OrderBy(x => x).ToArray();
-        }
-        
-        return Array.Empty<int>();
     }
 
     public bool Apply(int tid)

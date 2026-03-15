@@ -1,12 +1,14 @@
 using System.Text.Json;
 using AffinitySetter.Type;
 using AffinitySetter.Utils;
+
 #pragma warning disable CS8618
 namespace AffinitySetter.Config;
+
 internal sealed class ConfigManager : IDisposable
 {
     private readonly string _configFilePath;
-    private List<AffinityRule> _rules = new();
+    private AppConfig _config = new();
     private FileSystemWatcher? _configWatcher;
     private Timer? _reloadTimer;
     private readonly object _lock = new();
@@ -30,25 +32,19 @@ internal sealed class ConfigManager : IDisposable
                     CreateDefaultConfig();
                     return false;
                 }
-                
+
                 Console.WriteLine($"📖 Loading config: {_configFilePath}");
                 string json = File.ReadAllText(_configFilePath);
-                var newRules = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.ListAffinityRule) ?? new List<AffinityRule>();
-                // 初始化规则
-                foreach (var rule in newRules)
+                var newConfig = DeserializeConfig(json);
+                newConfig.Initialize();
+
+                if (!newConfig.HasContent)
                 {
-                    rule.Initialize();
-                    if (rule.Nice == null)
-                        rule.Nice = 0;
-                }
-                
-                if (newRules.Count == 0)
-                {
-                    Console.WriteLine("❌ No valid rules in configuration");
+                    Console.WriteLine("❌ No valid rules or frequency limits in configuration");
                     return false;
                 }
-                
-                _rules = newRules;
+
+                _config = newConfig;
                 PrintConfig();
                 return true;
             }
@@ -65,17 +61,20 @@ internal sealed class ConfigManager : IDisposable
         try
         {
             Console.WriteLine("🛠️ Creating default configuration...");
-            var defaultRules = new List<AffinityRule>
+            var defaultConfig = new AppConfig
             {
-                new()
+                Rules = new List<AffinityRule>
                 {
-                    Type = RuleType.ProcessName,
-                    Pattern = "example",
-                    Cpus = new[] {0, 1}
+                    new()
+                    {
+                        Type = RuleType.ProcessName,
+                        Pattern = "example",
+                        CpusRaw = new[] { 0, 1 }
+                    }
                 }
             };
-            
-            SaveConfig(defaultRules);
+
+            SaveConfig(defaultConfig);
             Console.WriteLine($"✅ Created default config at: {_configFilePath}");
         }
         catch (Exception ex)
@@ -84,34 +83,80 @@ internal sealed class ConfigManager : IDisposable
         }
     }
 
-    private void SaveConfig(List<AffinityRule> rules)
+    private static AppConfig DeserializeConfig(string json)
     {
-        string json = JsonSerializer.Serialize(rules, ConfigJsonContext.Default.ListAffinityRule);
-        File.WriteAllText(_configFilePath, json);
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.ValueKind switch
+        {
+            JsonValueKind.Array => new AppConfig
+            {
+                Rules = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.ListAffinityRule) ?? new List<AffinityRule>()
+            },
+            JsonValueKind.Object => JsonSerializer.Deserialize(json, ConfigJsonContext.Default.AppConfig) ?? new AppConfig(),
+            _ => new AppConfig()
+        };
+    }
+
+    public void SaveConfig(AppConfig config)
+    {
+        lock (_lock)
+        {
+            string json = JsonSerializer.Serialize(config, ConfigJsonContext.Default.AppConfig);
+            File.WriteAllText(_configFilePath, json);
+        }
+    }
+
+    public void SaveRules(IReadOnlyList<AffinityRule> rules)
+    {
+        lock (_lock)
+        {
+            var config = new AppConfig
+            {
+                Rules = rules.Select(CloneRule).ToList(),
+                FrequencyLimits = _config.FrequencyLimits.Select(CloneFrequencyLimit).ToList()
+            };
+            SaveConfig(config);
+        }
     }
 
     public IReadOnlyList<AffinityRule> GetRules()
     {
         lock (_lock)
         {
-            return new List<AffinityRule>(_rules);
+            return _config.Rules.Select(CloneRule).ToList();
+        }
+    }
+
+    public IReadOnlyList<CoreFrequencyLimit> GetFrequencyLimits()
+    {
+        lock (_lock)
+        {
+            return _config.FrequencyLimits.Select(CloneFrequencyLimit).ToList();
         }
     }
 
     private void PrintConfig()
     {
         Console.WriteLine("Loaded configuration:");
-        foreach (var rule in _rules)
+        foreach (var rule in _config.Rules)
         {
-            string typeName = rule.Type switch {
+            string typeName = rule.Type switch
+            {
                 RuleType.ProcessName => "Name",
                 RuleType.ExecutablePath => "Path",
                 RuleType.CommandLine => "Command",
                 _ => "Unknown"
             };
-        
+
             string patternType = rule.IsRegex ? "Regex" : "Text";
             Console.WriteLine($"  {typeName} ({patternType}): {rule.Pattern} -> CPUs {string.Join(",", rule.Cpus)}");
+        }
+
+        foreach (var limit in _config.FrequencyLimits)
+        {
+            string minText = limit.MinFrequencyKHz?.ToString() ?? "default";
+            string maxText = limit.MaxFrequencyKHz?.ToString() ?? "default";
+            Console.WriteLine($"  Freq: CPUs {string.Join(",", limit.Cpus)} -> min {minText} max {maxText} kHz");
         }
     }
 
@@ -121,20 +166,20 @@ internal sealed class ConfigManager : IDisposable
         {
             string configDir = Path.GetDirectoryName(_configFilePath) ?? "/etc";
             string configFile = Path.GetFileName(_configFilePath);
-            
+
             if (!Directory.Exists(configDir))
             {
                 Directory.CreateDirectory(configDir);
                 Console.WriteLine($"📁 Created config directory: {configDir}");
             }
-            
+
             _configWatcher = new FileSystemWatcher(configDir)
             {
                 Filter = configFile,
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
                 EnableRaisingEvents = true
             };
-            
+
             _configWatcher.Changed += OnConfigChanged;
             Console.WriteLine($"🔭 Watching config: {_configFilePath}");
         }
@@ -146,7 +191,6 @@ internal sealed class ConfigManager : IDisposable
 
     private void OnConfigChanged(object sender, FileSystemEventArgs e)
     {
-        // 使用 Change 重置定时器，而不是创建新的 Timer
         if (_reloadTimer == null)
         {
             _reloadTimer = new Timer(_ => ReloadConfig(), null, ReloadDelay, Timeout.Infinite);
@@ -163,14 +207,18 @@ internal sealed class ConfigManager : IDisposable
         {
             Console.WriteLine("\n🔄 Reloading configuration...");
             List<AffinityRule> oldRules;
+            List<CoreFrequencyLimit> oldFrequencyLimits;
             lock (_lock)
             {
-                oldRules = new List<AffinityRule>(_rules);
+                oldRules = _config.Rules.Select(CloneRule).ToList();
+                oldFrequencyLimits = _config.FrequencyLimits.Select(CloneFrequencyLimit).ToList();
             }
+
             if (LoadConfig())
             {
                 Console.WriteLine("✅ Configuration reloaded successfully");
                 RulesChanged?.Invoke(oldRules, GetRules());
+                FrequencyLimitsChanged?.Invoke(oldFrequencyLimits, GetFrequencyLimits());
             }
             else
             {
@@ -184,6 +232,34 @@ internal sealed class ConfigManager : IDisposable
     }
 
     public event Action<IReadOnlyList<AffinityRule>, IReadOnlyList<AffinityRule>>? RulesChanged;
+    public event Action<IReadOnlyList<CoreFrequencyLimit>, IReadOnlyList<CoreFrequencyLimit>>? FrequencyLimitsChanged;
+
+    private static AffinityRule CloneRule(AffinityRule rule)
+    {
+        var clone = new AffinityRule
+        {
+            Type = rule.Type,
+            Pattern = rule.Pattern,
+            CpusRaw = rule.CpusRaw,
+            IoPriorityClass = rule.IoPriorityClass,
+            IoPriorityData = rule.IoPriorityData,
+            Nice = rule.Nice
+        };
+        clone.Initialize();
+        return clone;
+    }
+
+    private static CoreFrequencyLimit CloneFrequencyLimit(CoreFrequencyLimit limit)
+    {
+        var clone = new CoreFrequencyLimit
+        {
+            CpusRaw = limit.CpusRaw,
+            MinFrequencyKHz = limit.MinFrequencyKHz,
+            MaxFrequencyKHz = limit.MaxFrequencyKHz
+        };
+        clone.Initialize();
+        return clone;
+    }
 
     public void Dispose()
     {

@@ -75,25 +75,7 @@ internal class AffinitySetter
                     {
                         string processName = args[1];
                         string cpuListStr = args[2];
-
-                        // Parse CPU list (e.g., "0-3,6")
-                        List<int> cpuList = new();
-                        foreach (var part in cpuListStr.Split(','))
-                        {
-                            if (part.Contains('-'))
-                            {
-                                var range = part.Split('-');
-                                if (int.TryParse(range[0], out int start) && int.TryParse(range[1], out int end))
-                                {
-                                    for (int i = start; i <= end; i++)
-                                        cpuList.Add(i);
-                                }
-                            }
-                            else if (int.TryParse(part, out int cpu))
-                            {
-                                cpuList.Add(cpu);
-                            }
-                        }
+                        int[] cpuList = CpuSelectionParser.Parse(cpuListStr);
 
                         var configManager = new ConfigManager(ConfigPath);
                         configManager.LoadConfig();
@@ -103,7 +85,8 @@ internal class AffinitySetter
                         var existing = rules.FirstOrDefault(r => r.Type == RuleType.ProcessName && r.Pattern == processName);
                         if (existing != null)
                         {
-                            existing.Cpus = cpuList.ToArray();
+                            existing.CpusRaw = cpuListStr;
+                            existing.Initialize();
                         }
                         else
                         {
@@ -111,14 +94,12 @@ internal class AffinitySetter
                             {
                                 Type = RuleType.ProcessName,
                                 Pattern = processName,
-                                Cpus = cpuList.ToArray()
+                                CpusRaw = cpuListStr
                             });
+                            rules[^1].Initialize();
                         }
 
-                        // Save updated config
-                        typeof(ConfigManager)
-                            .GetMethod("SaveConfig", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                            ?.Invoke(configManager, new object[] { rules });
+                        configManager.SaveRules(rules);
 
                         Console.WriteLine($"✅ Saved rule for '{processName}' with CPUs: {string.Join(",", cpuList)}");
                         return 0;
@@ -135,6 +116,7 @@ internal class AffinitySetter
         CrashHandler.Setup();
         var _configManager = new ConfigManager(ConfigPath);
         var threadScanner = new ThreadScanner(_configManager);
+        var frequencyLimitManager = new FrequencyLimitManager();
         // Remove ConfigReloaded event handler, only use RulesChanged for selective re-application
         // _configManager.ConfigReloaded += async () =>
         // {
@@ -181,11 +163,26 @@ internal class AffinitySetter
                 Console.WriteLine($"🔁 [RulesChanged] Reset rule '{rule.Pattern}' for {count} threads.");
             }
         };
+        _configManager.FrequencyLimitsChanged += (oldLimits, newLimits) =>
+        {
+            bool changed = oldLimits.Count != newLimits.Count ||
+                           oldLimits.Zip(newLimits, AreFrequencyLimitsEqual).Any(equal => !equal);
+
+            if (!changed)
+            {
+                Console.WriteLine("No frequency limit changes to apply.");
+                return;
+            }
+
+            frequencyLimitManager.ApplyLimits(newLimits);
+        };
         if (!_configManager.LoadConfig())
         {
-            Console.WriteLine("❌ No valid rules found. Exiting.");
+            Console.WriteLine("❌ No valid rules or frequency limits found. Exiting.");
             return 1;
         }
+
+        frequencyLimitManager.ApplyLimits(_configManager.GetFrequencyLimits());
 
         while (running)
         {
@@ -206,6 +203,11 @@ Options:
   --topology, -t    Show CPU topology information
   load <file>       Load configuration from specified file
   save <name> <cpu> Save a rule for process name with CPU list
+
+Frequency limits (config only):
+    frequencyLimits[].cpus     CPU list or keyword, same syntax as rules.cpus
+    frequencyLimits[].minfreq  Minimum frequency in kHz
+    frequencyLimits[].maxfreq  Maximum frequency in kHz
 
 CPU Keywords (for use in config 'cpus' field):
   P, PCore          All P-cores (Performance cores with HT)
@@ -263,5 +265,12 @@ Examples:
         Console.WriteLine("   P, PCore, E, ECore, P-physical, P-logical, P-HT");
         Console.WriteLine("   physical, no-HT, logical, HT, all");
         Console.WriteLine("\n   Use + to combine, - to exclude (e.g., \"all-logical\", \"P+E\")");
+    }
+
+    private static bool AreFrequencyLimitsEqual(CoreFrequencyLimit left, CoreFrequencyLimit right)
+    {
+        return left.MinFrequencyKHz == right.MinFrequencyKHz &&
+               left.MaxFrequencyKHz == right.MaxFrequencyKHz &&
+               left.Cpus.SequenceEqual(right.Cpus);
     }
 }

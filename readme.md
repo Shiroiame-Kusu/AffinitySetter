@@ -22,6 +22,7 @@
 - 🔄 **Hot reload** - Config changes take effect immediately
 - ⚡ **I/O priority control** - Support realtime, best-effort, idle
 - 🎮 **Nice priority adjustment** - Control process scheduling priority
+- 🎛️ **Per-core frequency limits** - Configure min/max CPU frequency per CPU set
 - 🔥 **Hybrid CPU support** - Auto-detect Intel 12th/13th/14th Gen P-cores and E-cores
 - 📝 **Flexible matching rules** - Match by process name, path, or command line
 - 🔍 **Regex support** - Use `/pattern/` for advanced matching
@@ -119,45 +120,73 @@ Config file is a JSON array. Each rule contains:
 | `ioprioritydata` | ❌ | I/O priority data: 0-7 |
 | `nice` | ❌ | Nice value: -20 to 19 |
 
+Root object also supports `frequencyLimits`, used to set cpufreq limits through `/sys/devices/system/cpu/cpu*/cpufreq`.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `frequencyLimits[].cpus` | ✅ | CPU list or keyword, same syntax as `rules[].cpus` |
+| `frequencyLimits[].minfreq` | ❌ | Minimum frequency in kHz |
+| `frequencyLimits[].maxfreq` | ❌ | Maximum frequency in kHz |
+
 ### Example Config
 
 ```json
-[
-  {
-    "type": "name",
-    "pattern": "game",
-    "cpus": "P",
-    "nice": -10
-  },
-  {
-    "type": "name",
-    "pattern": "browser",
-    "cpus": "E",
-    "iopriorityclass": 3,
-    "ioprioritydata": 7
-  },
-  {
-    "type": "cmdline",
-    "pattern": "/--type=renderer/",
-    "cpus": "E"
-  },
-  {
-    "type": "path",
-    "pattern": "/opt/myapp",
-    "cpus": "0-7"
-  },
-  {
-    "type": "name",
-    "pattern": "encoding",
-    "cpus": "P-physical"
-  },
-  {
-    "type": "name",
-    "pattern": "background",
-    "cpus": [16, 17, 18, 19]
-  }
-]
+{
+  "rules": [
+    {
+      "type": "name",
+      "pattern": "game",
+      "cpus": "P",
+      "nice": -10
+    },
+    {
+      "type": "name",
+      "pattern": "browser",
+      "cpus": "E",
+      "iopriorityclass": 3,
+      "ioprioritydata": 7
+    },
+    {
+      "type": "cmdline",
+      "pattern": "/--type=renderer/",
+      "cpus": "E"
+    },
+    {
+      "type": "path",
+      "pattern": "/opt/myapp",
+      "cpus": "0-7"
+    },
+    {
+      "type": "name",
+      "pattern": "encoding",
+      "cpus": "P-physical"
+    },
+    {
+      "type": "name",
+      "pattern": "background",
+      "cpus": [16, 17, 18, 19]
+    }
+  ],
+  "frequencyLimits": [
+    {
+      "cpus": "P-physical",
+      "minfreq": 2400000,
+      "maxfreq": 5400000
+    },
+    {
+      "cpus": "E",
+      "maxfreq": 3600000
+    }
+  ]
+}
 ```
+
+Notes:
+
+- `minfreq` and `maxfreq` use kHz, matching Linux cpufreq sysfs.
+- Omitted values fall back to the startup defaults for that CPU.
+- If the config root is still a legacy JSON array, it is treated as `rules` automatically.
+- On platforms where several CPUs share the same cpufreq policy, one write may affect the whole policy group.
 
 ### Match Types
 

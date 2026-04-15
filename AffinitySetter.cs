@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 using AffinitySetter.Config;
 using AffinitySetter.Utils;
@@ -6,7 +7,7 @@ using AffinitySetter.Type;
 namespace AffinitySetter;
 internal class AffinitySetter
 {
-    static bool running = true;
+    static readonly CancellationTokenSource cts = new();
 
     private static string ConfigPath = "/etc/AffinitySetter.conf";
     
@@ -111,7 +112,8 @@ internal class AffinitySetter
                     return 1;
             }
         }
-        Console.CancelKeyPress += (sender, e) => { running = false; e.Cancel = true; Console.WriteLine("\nExiting..."); };
+        Console.CancelKeyPress += (sender, e) => { e.Cancel = true; cts.Cancel(); Console.WriteLine("\nExiting..."); };
+        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; cts.Cancel(); Console.WriteLine("\nReceived SIGTERM, exiting..."); });
         Console.WriteLine("🌀 AffinitySetter Starting...");
         CrashHandler.Setup();
         var _configManager = new ConfigManager(ConfigPath);
@@ -184,10 +186,30 @@ internal class AffinitySetter
 
         frequencyLimitManager.ApplyLimits(_configManager.GetFrequencyLimits());
 
-        while (running)
+        try
         {
-            await threadScanner.ScanProcessesAsync();
-            await Task.Delay(1000);
+            var lastScanTime = DateTime.UtcNow;
+            while (!cts.IsCancellationRequested)
+            {
+                var now = DateTime.UtcNow;
+                if ((now - lastScanTime).TotalSeconds > 5)
+                {
+                    Console.WriteLine($"⏰ System resume detected (gap: {(now - lastScanTime).TotalSeconds:F0}s). Re-applying all rules...");
+                    threadScanner.ClearProcessed();
+                    frequencyLimitManager.ApplyLimits(_configManager.GetFrequencyLimits());
+                }
+
+                await threadScanner.ScanProcessesAsync(cts.Token);
+                lastScanTime = DateTime.UtcNow;
+                await Task.Delay(1000, cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            Console.WriteLine("🧹 Cleaning up...");
+            frequencyLimitManager.RestoreDefaults();
+            _configManager.Dispose();
         }
 
         return 0;

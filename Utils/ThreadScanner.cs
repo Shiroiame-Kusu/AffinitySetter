@@ -20,6 +20,20 @@ internal sealed class ThreadScanner
         _configManager = configManager;
     }
 
+    public void ClearProcessed()
+    {
+        lock (_tidLock)
+        {
+            _processedTids.Clear();
+            _currentScanTids.Clear();
+        }
+        lock (_cacheLock)
+        {
+            _exePathCache.Clear();
+            _cmdLineCache.Clear();
+        }
+    }
+
     public void ScanProcesses()
     {
         var rules = _configManager.GetRules();
@@ -49,14 +63,14 @@ internal sealed class ThreadScanner
         ClearCachesIfNeeded();
     }
     // ThreadScanner.cs (Parallel scan)
-    public async Task ScanProcessesAsync()
+    public async Task ScanProcessesAsync(CancellationToken cancellationToken = default)
     {
         var rules = _configManager.GetRules();
         var pidDirs = Directory.EnumerateDirectories("/proc")
             .Where(d => int.TryParse(Path.GetFileName(d), out _))
             .ToList();
 
-        var tasks = pidDirs.Select(pidDir => Task.Run(() => ProcessPid(pidDir, rules)));
+        var tasks = pidDirs.Select(pidDir => Task.Run(() => ProcessPid(pidDir, rules), cancellationToken));
         await Task.WhenAll(tasks);
 
         ClearCachesIfNeeded();

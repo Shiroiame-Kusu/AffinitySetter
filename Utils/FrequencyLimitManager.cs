@@ -3,6 +3,7 @@ namespace AffinitySetter.Utils;
 internal sealed class FrequencyLimitManager
 {
     private readonly Dictionary<int, CpuFrequencyState> _defaults = new();
+    private readonly HashSet<int> _modifiedCpus = new();
     private readonly HashSet<int> _unsupportedCpus = new();
     private readonly object _lock = new();
     private bool _loggedMissingCpufreq;
@@ -173,6 +174,7 @@ internal sealed class FrequencyLimitManager
                 }
             }
 
+            _modifiedCpus.Add(cpu);
             Console.WriteLine($"🎛️ CPU{cpu} frequency limit applied: min={target.MinKHz} max={target.MaxKHz} kHz");
         }
         catch (Exception ex)
@@ -192,6 +194,29 @@ internal sealed class FrequencyLimitManager
         {
             value = 0;
             return false;
+        }
+    }
+
+    public void RestoreDefaults()
+    {
+        lock (_lock)
+        {
+            if (_modifiedCpus.Count == 0) return;
+
+            foreach (var cpu in _modifiedCpus.OrderBy(c => c))
+            {
+                if (!_defaults.TryGetValue(cpu, out var state)) continue;
+                try
+                {
+                    WriteFrequency(state.ScalingMinPath, state.DefaultMinKHz);
+                    WriteFrequency(state.ScalingMaxPath, state.DefaultMaxKHz);
+                    Console.WriteLine($"🔄 CPU{cpu} frequency restored: min={state.DefaultMinKHz} max={state.DefaultMaxKHz} kHz");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"⚠️ Failed to restore CPU{cpu} frequency: {ex.Message}");
+                }
+            }
         }
     }
 

@@ -8,8 +8,37 @@ namespace AffinitySetter;
 internal class AffinitySetter
 {
     static readonly CancellationTokenSource cts = new();
+    static int _skipCleanup;        // !=0 → skip cpufreq restore (SIGTERM/shutdown path)
+    static int _shutdownLatched;    // latch so watchdog is armed once
 
     private static string ConfigPath = "/etc/AffinitySetter.conf";
+
+    [DllImport("libc", EntryPoint = "_exit")]
+    private static extern void LibcExit(int status);
+
+    private static void RequestShutdown(string source, bool skipCleanup)
+    {
+        if (Interlocked.Exchange(ref _shutdownLatched, 1) != 0) return;
+        if (skipCleanup) Interlocked.Exchange(ref _skipCleanup, 1);
+        try { Console.WriteLine($"\n🛑 Received {source}, exiting..."); } catch { }
+        try { cts.Cancel(); } catch { }
+        StartExitWatchdog(TimeSpan.FromSeconds(3));
+    }
+
+    private static void StartExitWatchdog(TimeSpan timeout)
+    {
+        var t = new Thread(() =>
+        {
+            try { Thread.Sleep(timeout); } catch { }
+            try { Console.Error.WriteLine("⏱️ Shutdown watchdog: forcing exit."); } catch { }
+            // Prefer raw _exit: skips managed shutdown which is what might be hanging.
+            // Note: a thread truly stuck in kernel D-state cannot be rescued from userspace;
+            // this only helps hangs in journald writes, FileSystemWatcher.Dispose, etc.
+            try { LibcExit(0); } catch { }
+            try { Environment.Exit(0); } catch { }
+        }) { IsBackground = true, Name = "ShutdownWatchdog" };
+        t.Start();
+    }
     
     private static string GetLogPath()
     {
@@ -112,8 +141,14 @@ internal class AffinitySetter
                     return 1;
             }
         }
-        Console.CancelKeyPress += (sender, e) => { e.Cancel = true; cts.Cancel(); Console.WriteLine("\nExiting..."); };
-        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; cts.Cancel(); Console.WriteLine("\nReceived SIGTERM, exiting..."); });
+        // Ctrl+C / SIGINT: interactive exit — run full cleanup (cpufreq restore).
+        Console.CancelKeyPress += (sender, e) => { e.Cancel = true; RequestShutdown("Ctrl+C", skipCleanup: false); };
+        // SIGTERM from systemd (systemctl stop / shutdown): skip cpufreq restore.
+        // Writing to /sys/.../cpufreq during shutdown can wedge the process in kernel
+        // D-state (uninterruptible sleep), which even SIGKILL can't unstick — systemd
+        // then times out waiting for the unit to die. Skip the sysfs writes on this path.
+        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; RequestShutdown("SIGTERM", skipCleanup: true); });
+        using var sighup  = PosixSignalRegistration.Create(PosixSignal.SIGHUP,  ctx => { ctx.Cancel = true; RequestShutdown("SIGHUP",  skipCleanup: true); });
         Console.WriteLine("🌀 AffinitySetter Starting...");
         CrashHandler.Setup();
         var _configManager = new ConfigManager(ConfigPath);
@@ -208,7 +243,14 @@ internal class AffinitySetter
         finally
         {
             Console.WriteLine("🧹 Cleaning up...");
-            frequencyLimitManager.RestoreDefaults();
+            if (Volatile.Read(ref _skipCleanup) == 0)
+            {
+                frequencyLimitManager.RestoreDefaults();
+            }
+            else
+            {
+                Console.WriteLine("⏭️ Skipping cpufreq restore on SIGTERM/SIGHUP to avoid kernel D-state during shutdown.");
+            }
             _configManager.Dispose();
         }
 

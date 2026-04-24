@@ -70,35 +70,43 @@ internal sealed class ThreadScanner
             .Where(d => int.TryParse(Path.GetFileName(d), out _))
             .ToList();
 
-        var tasks = pidDirs.Select(pidDir => Task.Run(() => ProcessPid(pidDir, rules), cancellationToken));
-        await Task.WhenAll(tasks);
+        var tasks = pidDirs.Select(pidDir => Task.Run(() => ProcessPid(pidDir, rules, cancellationToken), cancellationToken));
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cooperative cancellation — bail out immediately without draining the rest.
+        }
 
         ClearCachesIfNeeded();
     }
 
-    private void ProcessPid(string pidDir, IReadOnlyList<AffinityRule> rules)
+    private void ProcessPid(string pidDir, IReadOnlyList<AffinityRule> rules, CancellationToken cancellationToken = default)
     {
-        if (!int.TryParse(Path.GetFileName(pidDir), out int pid)) 
+        if (cancellationToken.IsCancellationRequested) return;
+        if (!int.TryParse(Path.GetFileName(pidDir), out int pid))
             return;
 
         string statusPath = Path.Combine(pidDir, "status");
-        if (!File.Exists(statusPath)) 
+        if (!File.Exists(statusPath))
             return;
 
         string? procName = ReadNameFromStatus(statusPath);
-        if (procName == null) 
+        if (procName == null)
             return;
 
         string? exePath = GetExecutablePath(pid);
         string? cmdLine = GetCommandLine(pid);
         string taskDir = Path.Combine(pidDir, "task");
-        if (!Directory.Exists(taskDir)) 
+        if (!Directory.Exists(taskDir))
             return;
 
-        ProcessThreads(pid, procName, exePath, cmdLine, taskDir, rules);
+        ProcessThreads(pid, procName, exePath, cmdLine, taskDir, rules, cancellationToken);
     }
 
-    private void ProcessThreads(int pid, string procName, string? exePath, string? cmdLine, string taskDir, IReadOnlyList<AffinityRule> rules)
+    private void ProcessThreads(int pid, string procName, string? exePath, string? cmdLine, string taskDir, IReadOnlyList<AffinityRule> rules, CancellationToken cancellationToken = default)
     {
         if (!Directory.Exists(taskDir))
             return; // Handle missing directory gracefully
@@ -107,8 +115,9 @@ internal sealed class ThreadScanner
         {
             foreach (var tidDir in Directory.EnumerateDirectories(taskDir))
             {
+                if (cancellationToken.IsCancellationRequested) return;
                 var tidName = Path.GetFileName(tidDir);
-                if (!int.TryParse(tidName, out int tid)) 
+                if (!int.TryParse(tidName, out int tid))
                     continue;
 
                 lock (_tidLock)
@@ -118,7 +127,7 @@ internal sealed class ThreadScanner
                         continue; // 已处理过，跳过
                 }
                 ApplyAffinityRules(tid, pid, procName, exePath, cmdLine, rules);
-                
+
             }
         }
         catch (DirectoryNotFoundException)

@@ -168,46 +168,31 @@ internal sealed class CpuTopology
         var pCoresPhysical = new List<int>();
         var pCoresLogical = new List<int>();
 
-        // 方法1：通过 cpu_capacity 检测（某些内核支持）
-        bool useCapacity = TryDetectByCapacity(out var highCapacityCpus, out var lowCapacityCpus);
-
-        if (useCapacity && highCapacityCpus.Count > 0 && lowCapacityCpus.Count > 0)
+        // 方法1：通过 topology/core_type 检测（内核原生的混合架构标记）
+        if (TryDetectByCoreType(cpuSiblings, pCores, eCores, pCoresPhysical, pCoresLogical))
         {
-            pCores.AddRange(highCapacityCpus);
-            eCores.AddRange(lowCapacityCpus);
+            // 已通过 core_type 成功分类
+        }
+        // 方法2：通过 cpu_capacity 检测（按物理核心分组后，使用最大容量间隙切分）
+        else if (TryDetectByCapacity(cpuSiblings, pCores, eCores, pCoresPhysical, pCoresLogical))
+        {
+            // 已通过 cpu_capacity 成功分类
         }
         else
         {
-            // 方法2：通过超线程特征检测
+            // 方法3：通过超线程特征检测
             // P 核心通常有超线程（siblings > 1），E 核心没有超线程（siblings == 1）
-            var processedGroups = new HashSet<string>();
-
-            foreach (var cpu in AllCpus)
+            foreach (var siblings in GetSiblingGroups(cpuSiblings))
             {
-                if (!cpuSiblings.TryGetValue(cpu, out var siblings))
-                    continue;
-
-                string groupKey = string.Join(",", siblings.OrderBy(x => x));
-                if (processedGroups.Contains(groupKey))
-                    continue;
-                processedGroups.Add(groupKey);
-
                 if (siblings.Length > 1)
                 {
                     // 有超线程，推测为 P 核心
-                    pCores.AddRange(siblings);
-                    int minSibling = siblings.Min();
-                    pCoresPhysical.Add(minSibling);
-                    foreach (var sib in siblings)
-                    {
-                        if (sib != minSibling)
-                            pCoresLogical.Add(sib);
-                    }
+                    AddPCoreGroup(siblings, pCores, pCoresPhysical, pCoresLogical);
                 }
                 else
                 {
                     // 没有超线程，推测为 E 核心
-                    eCores.Add(siblings[0]);
+                    AddECoreGroup(siblings, eCores);
                 }
             }
         }
@@ -230,43 +215,179 @@ internal sealed class CpuTopology
         }
     }
 
-    private bool TryDetectByCapacity(out List<int> highCapacity, out List<int> lowCapacity)
+    private bool TryDetectByCoreType(
+        Dictionary<int, int[]> cpuSiblings,
+        List<int> pCores,
+        List<int> eCores,
+        List<int> pCoresPhysical,
+        List<int> pCoresLogical)
     {
-        highCapacity = new List<int>();
-        lowCapacity = new List<int>();
-        var capacities = new Dictionary<int, int>();
+        var groups = new List<(int[] siblings, int coreType)>();
 
-        foreach (var cpu in AllCpus)
+        foreach (var siblings in GetSiblingGroups(cpuSiblings))
         {
-            string capacityPath = $"/sys/devices/system/cpu/cpu{cpu}/cpu_capacity";
-            if (File.Exists(capacityPath))
+            int? coreType = null;
+            foreach (var cpu in siblings)
             {
-                string content = File.ReadAllText(capacityPath).Trim();
-                if (int.TryParse(content, out int capacity))
-                {
-                    capacities[cpu] = capacity;
-                }
+                coreType = ReadIntFromSysfs($"/sys/devices/system/cpu/cpu{cpu}/topology/core_type");
+                if (coreType.HasValue)
+                    break;
+            }
+
+            if (!coreType.HasValue)
+                return false;
+
+            groups.Add((siblings, coreType.Value));
+        }
+
+        var uniqueTypes = groups.Select(x => x.coreType).Distinct().OrderByDescending(x => x).ToList();
+        if (uniqueTypes.Count < 2)
+            return false;
+
+        int performanceType = uniqueTypes[0];
+
+        foreach (var group in groups)
+        {
+            if (group.coreType == performanceType)
+            {
+                AddPCoreGroup(group.siblings, pCores, pCoresPhysical, pCoresLogical);
+            }
+            else
+            {
+                AddECoreGroup(group.siblings, eCores);
             }
         }
 
-        if (capacities.Count == 0)
-            return false;
+        return pCores.Count > 0 && eCores.Count > 0;
+    }
 
-        // 检查是否有不同的容量值
-        var uniqueCapacities = capacities.Values.Distinct().OrderByDescending(x => x).ToList();
-        if (uniqueCapacities.Count < 2)
-            return false; // 所有 CPU 容量相同，不是混合架构
+    private bool TryDetectByCapacity(
+        Dictionary<int, int[]> cpuSiblings,
+        List<int> pCores,
+        List<int> eCores,
+        List<int> pCoresPhysical,
+        List<int> pCoresLogical)
+    {
+        var groups = new List<(int[] siblings, int capacity)>();
 
-        int maxCapacity = uniqueCapacities[0];
-        foreach (var kvp in capacities)
+        foreach (var siblings in GetSiblingGroups(cpuSiblings))
         {
-            if (kvp.Value == maxCapacity)
-                highCapacity.Add(kvp.Key);
-            else
-                lowCapacity.Add(kvp.Key);
+            int? capacity = null;
+            foreach (var cpu in siblings)
+            {
+                int? currentCapacity = ReadIntFromSysfs($"/sys/devices/system/cpu/cpu{cpu}/cpu_capacity");
+                if (!currentCapacity.HasValue)
+                    continue;
+
+                capacity = !capacity.HasValue || currentCapacity.Value > capacity.Value
+                    ? currentCapacity.Value
+                    : capacity.Value;
+            }
+
+            if (!capacity.HasValue)
+                return false;
+
+            groups.Add((siblings, capacity.Value));
         }
 
-        return true;
+        if (groups.Count == 0)
+            return false;
+
+        var uniqueCapacities = groups.Select(x => x.capacity).Distinct().OrderBy(x => x).ToList();
+        if (uniqueCapacities.Count < 2)
+            return false; // 所有核心容量相同，不是混合架构
+
+        int splitIndex = -1;
+        int largestGap = 0;
+
+        for (int i = 0; i < uniqueCapacities.Count - 1; i++)
+        {
+            int gap = uniqueCapacities[i + 1] - uniqueCapacities[i];
+            if (gap > largestGap)
+            {
+                largestGap = gap;
+                splitIndex = i;
+            }
+        }
+
+        if (splitIndex < 0)
+            return false;
+
+        int lowerCapacity = uniqueCapacities[splitIndex];
+        int upperCapacity = uniqueCapacities[splitIndex + 1];
+
+        // 容量差过小通常只是偏好核心，不足以证明是 P/E 混合架构。
+        if (!IsMeaningfulCapacityGap(lowerCapacity, upperCapacity))
+            return false;
+
+        foreach (var group in groups)
+        {
+            if (group.capacity >= upperCapacity)
+            {
+                AddPCoreGroup(group.siblings, pCores, pCoresPhysical, pCoresLogical);
+            }
+            else
+            {
+                AddECoreGroup(group.siblings, eCores);
+            }
+        }
+
+        return pCores.Count > 0 && eCores.Count > 0;
+    }
+
+    private IEnumerable<int[]> GetSiblingGroups(Dictionary<int, int[]> cpuSiblings)
+    {
+        var processedGroups = new HashSet<string>();
+
+        foreach (var cpu in AllCpus)
+        {
+            if (!cpuSiblings.TryGetValue(cpu, out var siblings) || siblings.Length == 0)
+                continue;
+
+            string groupKey = string.Join(",", siblings);
+            if (processedGroups.Add(groupKey))
+                yield return siblings;
+        }
+    }
+
+    private static void AddPCoreGroup(
+        int[] siblings,
+        List<int> pCores,
+        List<int> pCoresPhysical,
+        List<int> pCoresLogical)
+    {
+        pCores.AddRange(siblings);
+
+        int physicalCpu = siblings[0];
+        pCoresPhysical.Add(physicalCpu);
+
+        foreach (var cpu in siblings)
+        {
+            if (cpu != physicalCpu)
+                pCoresLogical.Add(cpu);
+        }
+    }
+
+    private static void AddECoreGroup(int[] siblings, List<int> eCores)
+    {
+        eCores.AddRange(siblings);
+    }
+
+    private static int? ReadIntFromSysfs(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+
+        string content = File.ReadAllText(path).Trim();
+        return int.TryParse(content, out int value) ? value : null;
+    }
+
+    private static bool IsMeaningfulCapacityGap(int lowerCapacity, int upperCapacity)
+    {
+        if (lowerCapacity <= 0 || upperCapacity <= lowerCapacity)
+            return false;
+
+        return (double)upperCapacity / lowerCapacity >= 1.20d;
     }
 
     private static int[] ParseCpuRange(string input)
